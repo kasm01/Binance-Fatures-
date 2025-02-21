@@ -1,0 +1,137 @@
+import os
+import logging
+import time
+import ta
+import pandas as pd
+import pandas_ta as pta
+import backtrader as bt
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sentry_sdk import init as sentry_init
+from kucoin.client import Client as KuCoinClient
+from binance.client import Client as BinanceClient
+from binance.enums import ORDER_TYPE_MARKET, SIDE_BUY, SIDE_SELL
+
+# 📌 API Entegrasyonu - Binance ve KuCoin
+BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"
+BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"
+KUCOIN_API_KEY = "YOUR_KUCOIN_API_KEY"
+KUCOIN_API_SECRET = "YOUR_KUCOIN_API_SECRET"
+KUCOIN_PASSPHRASE = "YOUR_KUCOIN_PASSPHRASE"
+
+binance_client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET, testnet=True)
+kucoin_client = KuCoinClient(KUCOIN_API_KEY, KUCOIN_API_SECRET, KUCOIN_PASSPHRASE)
+
+# 📌 Hata İzleme için Sentry Entegrasyonu
+sentry_init(dsn="YOUR_SENTRY_DSN", traces_sample_rate=1.0)
+
+# 📌 Piyasa Verilerini Çekme (Binance & KuCoin)
+def get_market_data(symbol, exchange="binance"):
+    try:
+        if exchange == "binance":
+            klines = binance_client.get_klines(symbol=symbol, interval=BinanceClient.KLINE_INTERVAL_1HOUR, limit=50)
+        else:
+            klines = kucoin_client.get_kline_data(symbol, "1hour", 50)
+        
+        df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+        return df
+    except Exception as e:
+        logging.error(f"⚠️ API isteği başarısız: {e}")
+        return None
+
+# 📌 AI Destekli Teknik Göstergeler
+def add_technical_indicators(df):
+    df.ta.rsi(append=True)
+    df.ta.macd(append=True)
+    df.ta.bbands(append=True)
+    df.ta.ema(50, append=True)
+    df.ta.ema(200, append=True)
+    df.ta.adx(append=True)
+    return df
+
+# 📌 AI Destekli Scalping Stratejisi (pandas_ta ile)
+def scalping_strategy(symbol):
+    df = get_market_data(symbol)
+    if df is None:
+        return None
+    
+    df = add_technical_indicators(df)
+
+    if df['RSI_14'].iloc[-1] < 30 and df['close'].iloc[-1] < df['BBL_5_2.0'].iloc[-1]:
+        return "BUY"
+    elif df['RSI_14'].iloc[-1] > 70 and df['close'].iloc[-1] > df['BBU_5_2.0'].iloc[-1]:
+        return "SELL"
+    else:
+        return None
+
+# 📌 AI Destekli Swing Trade Stratejisi
+def swing_trade_strategy(symbol):
+    df = get_market_data(symbol)
+    if df is None:
+        return None
+    
+    df = add_technical_indicators(df)
+
+    if df['EMA_50'].iloc[-1] > df['EMA_200'].iloc[-1] and df['MACD_12_26_9'].iloc[-1] > 0 and df['ADX_14'].iloc[-1] > 25:
+        return "BUY"
+    elif df['EMA_50'].iloc[-1] < df['EMA_200'].iloc[-1] and df['MACD_12_26_9'].iloc[-1] < 0 and df['ADX_14'].iloc[-1] > 25:
+        return "SELL"
+    else:
+        return None
+
+# 📌 AI Destekli PyTorch LSTM Modeli
+class LSTMModel(nn.Module):
+    def __init__(self, input_size=1, hidden_layer_size=50, output_size=1):
+        super().__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.lstm = nn.LSTM(input_size, hidden_layer_size)
+        self.linear = nn.Linear(hidden_layer_size, output_size)
+        self.hidden_cell = (torch.zeros(1,1,self.hidden_layer_size), torch.zeros(1,1,self.hidden_layer_size))
+
+    def forward(self, input_seq):
+        lstm_out, self.hidden_cell = self.lstm(input_seq.view(len(input_seq),1,-1), self.hidden_cell)
+        predictions = self.linear(lstm_out.view(len(input_seq), -1))
+        return predictions[-1]
+
+# 📌 AI Destekli Dinamik Kaldıraç Yönetimi
+def get_dynamic_leverage(symbol):
+    df = get_market_data(symbol)
+    if df is None:
+        return 5  # Varsayılan kaldıraç
+
+    df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
+    volatility = df['atr'].iloc[-1] / df['close'].iloc[-1]
+
+    if volatility > 0.05:
+        return 2
+    elif volatility > 0.02:
+        return 5
+    else:
+        return 10
+
+# 📌 Binance & KuCoin İşlem Açma
+def place_order(symbol, exchange="binance"):
+    strategy = scalping_strategy if exchange == "binance" else swing_trade_strategy
+    action = strategy(symbol)
+
+    if action is None:
+        logging.info(f"🚫 {symbol} için uygun işlem sinyali bulunamadı.")
+        return
+
+    leverage = get_dynamic_leverage(symbol)
+
+    if exchange == "binance":
+        binance_client.futures_create_order(symbol=symbol, side=action, type=ORDER_TYPE_MARKET, quantity=0.01)
+    else:
+        kucoin_client.create_market_order(symbol, action, size=0.01)
+
+    logging.info(f"✅ {symbol} için {action} işlemi açıldı. Kaldıraç: {leverage}x")
+
+# 📌 Çalıştırma
+symbols = ["BTCUSDT", "ETHUSDT"]
+for symbol in symbols:
+    place_order(symbol, "binance")
+    place_order(symbol, "kucoin")
