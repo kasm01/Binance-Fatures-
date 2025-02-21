@@ -1,1 +1,1 @@
-# Binance-Fatures-
+# Binance-Fatures- gerçek işlem botu 
