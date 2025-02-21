@@ -1,0 +1,1 @@
+!pip install pandas_ta kucoin-python backtrader sentry-sdk torch torchvision tensorflow
