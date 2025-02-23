@@ -1,0 +1,126 @@
+import os
+import time
+import logging
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import optuna
+import ta
+import threading
+import asyncio
+import websockets
+from binance.client import Client as BinanceClient
+from kucoin.client import Client as KucoinClient
+from okx.client import Client as OKXClient
+from sklearn.preprocessing import MinMaxScaler
+from telegram import Bot
+
+# API Anahtarları
+BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"
+BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"
+KUCOIN_API_KEY = "YOUR_KUCOIN_API_KEY"
+KUCOIN_API_SECRET = "YOUR_KUCOIN_API_SECRET"
+OKX_API_KEY = "YOUR_OKX_API_KEY"
+OKX_API_SECRET = "YOUR_OKX_API_SECRET"
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+
+# API Bağlantıları
+binance_client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
+kucoin_client = KucoinClient(KUCOIN_API_KEY, KUCOIN_API_SECRET)
+okx_client = OKXClient(OKX_API_KEY, OKX_API_SECRET)
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
+# Piyasa Verilerini Çekme
+
+def get_market_data(symbol, exchange="binance"):
+    try:
+        if exchange == "binance":
+            klines = binance_client.get_klines(symbol=symbol, interval=BinanceClient.KLINE_INTERVAL_1HOUR, limit=50)
+        elif exchange == "kucoin":
+            klines = kucoin_client.get_kline_data(symbol, "1hour", 50)
+        else:
+            klines = okx_client.get_candlestick(symbol, "1H", 50)
+        
+        df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+        return df
+    except Exception as e:
+        logging.error(f"API isteği başarısız: {e}")
+        return None
+
+# AI Destekli Teknik Göstergeler
+
+def add_technical_indicators(df):
+    df.ta.rsi(append=True)
+    df.ta.macd(append=True)
+    df.ta.bbands(append=True)
+    df.ta.ema(50, append=True)
+    df.ta.ema(200, append=True)
+    df.ta.adx(append=True)
+    return df
+
+# AI Destekli Grid Trading
+
+def grid_trading(symbol, grid_size=5, order_count=10):
+    price = float(binance_client.get_symbol_ticker(symbol=symbol)['price'])
+    grid_spacing = price * (grid_size / 100)
+    
+    for i in range(order_count):
+        buy_price = price - (i * grid_spacing)
+        sell_price = price + (i * grid_spacing)
+        binance_client.futures_create_order(symbol=symbol, side="BUY", type="LIMIT", price=round(buy_price, 2), quantity=0.01, timeInForce="GTC")
+        binance_client.futures_create_order(symbol=symbol, side="SELL", type="LIMIT", price=round(sell_price, 2), quantity=0.01, timeInForce="GTC")
+    
+        logging.info(f"{symbol} için Grid Trading Emri Verildi - Alım: {buy_price}, Satış: {sell_price}")
+
+# AI Destekli Piyasa Yapıcı Strateji
+
+def market_maker(symbol):
+    order_book = binance_client.get_order_book(symbol=symbol, limit=50)
+    bid_prices = np.array([float(order[0]) for order in order_book["bids"]])
+    ask_prices = np.array([float(order[0]) for order in order_book["asks"]])
+    spread = (ask_prices[0] - bid_prices[0]) / bid_prices[0]
+    
+    buy_price = bid_prices[0] * 0.999 if spread > 0.002 else bid_prices[0] * 0.9995
+    sell_price = ask_prices[0] * 1.001 if spread > 0.002 else ask_prices[0] * 1.0005
+    
+    binance_client.futures_create_order(symbol=symbol, side="BUY", type="LIMIT", price=round(buy_price, 2), quantity=0.01, timeInForce="GTC")
+    binance_client.futures_create_order(symbol=symbol, side="SELL", type="LIMIT", price=round(sell_price, 2), quantity=0.01, timeInForce="GTC")
+    
+    logging.info(f"{symbol} için Market Maker Emri Verildi - Alım: {buy_price}, Satış: {sell_price}")
+
+# AI Model Eğitimi
+
+def train_xgboost_model():
+    df = pd.read_csv("market_data.csv")
+    X = df[['volatility', 'liquidity', 'spread']]
+    y = df['optimal_leverage']
+    model = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=5)
+    model.fit(X, y)
+    return model
+
+# AI Destekli WebSocket İşlem Açma
+
+async def websocket_listener(symbol):
+    uri = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
+    while True:
+        try:
+            async with websockets.connect(uri) as websocket:
+                logging.info(f"WebSocket bağlantısı kuruldu: {symbol}")
+                while True:
+                    message = await websocket.recv()
+                    logging.info(f"{symbol} WebSocket verisi alındı.")
+        except Exception as e:
+            logging.error(f"WebSocket bağlantısı kapandı: {e}. 10 saniye sonra tekrar bağlanıyor...")
+            await asyncio.sleep(10)
+
+# Botu Başlatma
+
+if __name__ == "__main__":
+    symbols = ["BTCUSDT", "ETHUSDT"]
+    for symbol in symbols:
+        threading.Thread(target=lambda: asyncio.run(websocket_listener(symbol)), daemon=True).start()
+    grid_trading("BTCUSDT")
+    market_maker("ETHUSDT")
