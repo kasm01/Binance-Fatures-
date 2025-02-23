@@ -1,0 +1,118 @@
+import os
+import time
+import logging
+import numpy as np
+import pandas as pd
+import threading
+import asyncio
+import websockets
+import xgboost as xgb
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from binance.client import Client as BinanceClient
+from kucoin.client import Client as KuCoinClient
+from okx.client import Client as OKXClient
+from sklearn.preprocessing import MinMaxScaler
+from sentry_sdk import init as sentry_init
+from datetime import datetime
+
+# API Anahtarlarını Tanımla
+BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"
+BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"
+KUCOIN_API_KEY = "YOUR_KUCOIN_API_KEY"
+KUCOIN_API_SECRET = "YOUR_KUCOIN_API_SECRET"
+OKX_API_KEY = "YOUR_OKX_API_KEY"
+OKX_API_SECRET = "YOUR_OKX_API_SECRET"
+SENTRY_DSN = "YOUR_SENTRY_DSN"
+
+# API Bağlantılarını Başlat
+binance_client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
+kucoin_client = KuCoinClient(KUCOIN_API_KEY, KUCOIN_API_SECRET)
+okx_client = OKXClient(OKX_API_KEY, OKX_API_SECRET)
+
+# Sentry Hata İzleme
+sentry_init(dsn=SENTRY_DSN, traces_sample_rate=1.0)
+
+# AI Destekli Risk Yönetimi
+class RiskManagement:
+    def __init__(self):
+        self.scaler = MinMaxScaler()
+
+    def calculate_risk_score(self, df):
+        df['atr'] = df['close'].pct_change().rolling(14).std()
+        df['spread'] = df['high'] - df['low']
+        risk_score = (df['atr'].iloc[-1] * 0.5) + (df['spread'].iloc[-1] * 0.3)
+        return risk_score
+
+# AI Modeli (LSTM + Attention)
+class LSTMAttention(nn.Module):
+    def __init__(self, input_size=1, hidden_layer_size=50, output_size=1):
+        super().__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.lstm = nn.LSTM(input_size, hidden_layer_size, batch_first=True)
+        self.attention = nn.Linear(hidden_layer_size, 1)
+        self.linear = nn.Linear(hidden_layer_size, output_size)
+
+    def forward(self, input_seq):
+        lstm_out, _ = self.lstm(input_seq)
+        attn_weights = torch.softmax(self.attention(lstm_out), dim=1)
+        context_vector = torch.sum(attn_weights * lstm_out, dim=1)
+        return self.linear(context_vector)
+
+# AI Destekli Grid Trading
+class GridTrading:
+    def __init__(self, client, symbol, grid_size=5, order_count=10):
+        self.client = client
+        self.symbol = symbol
+        self.grid_size = grid_size
+        self.order_count = order_count
+
+    def execute_grid_orders(self):
+        price = float(self.client.get_symbol_ticker(symbol=self.symbol)['price'])
+        grid_spacing = price * (self.grid_size / 100)
+        for i in range(self.order_count):
+            buy_price = price - (i * grid_spacing)
+            sell_price = price + (i * grid_spacing)
+            self.client.futures_create_order(symbol=self.symbol, side="BUY", type="LIMIT", price=round(buy_price, 2), quantity=0.01, timeInForce="GTC")
+            self.client.futures_create_order(symbol=self.symbol, side="SELL", type="LIMIT", price=round(sell_price, 2), quantity=0.01, timeInForce="GTC")
+            logging.info(f"📌 {self.symbol} için AI Destekli Grid Trading Açıldı - Alım: {buy_price}, Satış: {sell_price}")
+
+# API Rate Limit Yönetimi
+class APIRateLimiter:
+    def __init__(self, retries=5, backoff_factor=2):
+        self.retries = retries
+        self.backoff_factor = backoff_factor
+
+    def execute_with_backoff(self, func, *args, **kwargs):
+        for attempt in range(self.retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                wait_time = min(60, self.backoff_factor ** attempt)
+                logging.warning(f"API Limiti Aşıldı, {wait_time} saniye bekleniyor...")
+                time.sleep(wait_time)
+        logging.error("Maksimum API tekrar denemesi aşıldı.")
+        return None
+
+# WebSocket Bağlantısı
+async def websocket_listener(symbol):
+    uri = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
+    while True:
+        try:
+            async with websockets.connect(uri) as websocket:
+                logging.info(f"✅ WebSocket bağlantısı kuruldu: {symbol}")
+                while True:
+                    message = await websocket.recv()
+                    logging.info(f"📡 {symbol} WebSocket verisi alındı.")
+        except Exception as e:
+            logging.error(f"❌ WebSocket bağlantısı kapandı: {e}. 10 saniye sonra tekrar bağlanıyor...")
+            await asyncio.sleep(10)
+
+# Bot Başlatma
+if __name__ == "__main__":
+    symbols = ["BTCUSDT", "ETHUSDT"]
+    for symbol in symbols:
+        threading.Thread(target=lambda: asyncio.run(websocket_listener(symbol)), daemon=True).start()
+    
+    logging.info("🚀 Binance_Kucoin_OKX_Bot Çalıştırıldı!")
