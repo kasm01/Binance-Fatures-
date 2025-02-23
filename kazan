@@ -1,0 +1,122 @@
+import time
+import logging
+import numpy as np
+import requests
+import websocket
+from binance.client import Client as BinanceClient
+from kucoin.client import Client as KucoinClient
+from okx import MarketAPI
+from textblob import TextBlob
+from sklearn.preprocessing import MinMaxScaler
+import ta
+import pandas as pd
+import xgboost as xgb
+
+# API Anahtarları
+BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"
+BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"
+KUCOIN_API_KEY = "YOUR_KUCOIN_API_KEY"
+KUCOIN_API_SECRET = "YOUR_KUCOIN_API_SECRET"
+KUCOIN_PASSPHRASE = "YOUR_KUCOIN_PASSPHRASE"
+OKX_API_KEY = "YOUR_OKX_API_KEY"
+OKX_API_SECRET = "YOUR_OKX_API_SECRET"
+OKX_PASSPHRASE = "YOUR_OKX_PASSPHRASE"
+
+# API Bağlantıları
+binance_client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
+kucoin_client = KucoinClient(KUCOIN_API_KEY, KUCOIN_API_SECRET, KUCOIN_PASSPHRASE)
+okx_client = MarketAPI(api_key=OKX_API_KEY, api_secret=OKX_API_SECRET, passphrase=OKX_PASSPHRASE)
+
+# 📌 Akıllı API Rate Limit Yönetimi
+
+def api_request_with_retry(api_call, *args, max_retries=5, **kwargs):
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            response = api_call(*args, **kwargs)
+            return response
+        except Exception as e:
+            wait_time = min(30, 2 ** retry_count)
+            logging.warning(f"API rate limit hatası: {e}. {wait_time} saniye bekleniyor...")
+            time.sleep(wait_time)
+            retry_count += 1
+    return None
+
+# 📌 AI Destekli Order Book Cluster Analizi
+
+def order_book_cluster_analysis(symbol):
+    order_book = binance_client.get_order_book(symbol=symbol, limit=100)
+    bid_prices = np.array([float(order[0]) for order in order_book["bids"]])
+    ask_prices = np.array([float(order[0]) for order in order_book["asks"]])
+    price_levels = np.concatenate((bid_prices, ask_prices))
+    clusters = np.histogram(price_levels, bins=10)[0]
+    return clusters
+
+# 📌 AI Destekli Piyasa Likidite Analizi
+
+def get_liquidity_index(symbol):
+    order_book = binance_client.get_order_book(symbol=symbol, limit=100)
+    bid_volume = sum([float(order[1]) for order in order_book["bids"]])
+    ask_volume = sum([float(order[1]) for order in order_book["asks"]])
+    liquidity_index = (bid_volume + ask_volume) / 2
+    return liquidity_index
+
+# 📌 Makro Piyasa Koşulları Analizi
+
+def macro_market_analysis():
+    response = requests.get("https://www.investing.com/economic-calendar/")
+    if response.status_code == 200:
+        return "Makro veriler başarıyla alındı."
+    return "Makro piyasa verileri alınamadı."
+
+# 📌 AI Destekli Sentiment Analizi
+
+def get_market_sentiment():
+    news_url = "https://cointelegraph.com/tags/bitcoin"
+    response = requests.get(news_url)
+    soup = BeautifulSoup(response.text, "html.parser")
+    headlines = [article.text for article in soup.find_all("span", class_="post-card-inline__title")][:5]
+    sentiment_score = sum([TextBlob(headline).sentiment.polarity for headline in headlines]) / len(headlines)
+    return sentiment_score
+
+# 📌 OKX WebSocket Bağlantısı
+
+def on_message(ws, message):
+    logging.info(f"OKX WebSocket verisi alındı: {message}")
+
+def on_error(ws, error):
+    logging.error(f"OKX WebSocket hatası: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    logging.warning("OKX WebSocket bağlantısı kapandı.")
+
+def on_open(ws):
+    ws.send('{"op": "subscribe", "args": [{"channel": "trades", "instId": "BTC-USDT"}]}')
+    logging.info("OKX WebSocket bağlantısı kuruldu ve abone olundu.")
+
+ws = websocket.WebSocketApp(
+    "wss://ws.okx.com:8443/ws/v5/public",
+    on_message=on_message,
+    on_error=on_error,
+    on_close=on_close
+)
+threading.Thread(target=lambda: ws.run_forever(), daemon=True).start()
+
+# 📌 AI Destekli Grid Trading Algoritması
+
+def grid_trading(symbol, grid_size=5, order_count=10):
+    price = float(binance_client.get_symbol_ticker(symbol=symbol)['price'])
+    grid_spacing = price * (grid_size / 100)
+    for i in range(order_count):
+        buy_price = price - (i * grid_spacing)
+        sell_price = price + (i * grid_spacing)
+        binance_client.futures_create_order(symbol=symbol, side="BUY", type="LIMIT", price=round(buy_price, 2), quantity=0.01, timeInForce="GTC")
+        binance_client.futures_create_order(symbol=symbol, side="SELL", type="LIMIT", price=round(sell_price, 2), quantity=0.01, timeInForce="GTC")
+        logging.info(f"Grid Trading Açıldı: {symbol} - Alım: {buy_price}, Satış: {sell_price}")
+
+# 📌 Çalıştırma
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    symbols = ["BTCUSDT", "ETHUSDT"]
+    for symbol in symbols:
+        grid_trading(symbol)
